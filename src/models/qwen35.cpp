@@ -1,3 +1,4 @@
+#include <cstring>
 #include "models.h"
 #include "llama-memory-recurrent.h"
 
@@ -539,6 +540,15 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llm_graph_params & params)
     ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.token) {
         ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
+
+        // EXPERIMENT (build 6): when the output layer is the duplicated token embedding (tied weights), it holds
+        // the same rows on the output device, which is where the MTP head runs. Looking the rows up there saves
+        // a round trip to the input device and a copy across in every head step.
+        if (!layer.nextn.embed_tokens && model.output && model.output != model.tok_embd &&
+            strcmp(model.output->name, model.tok_embd->name) == 0 && ggml_are_same_shape(model.output, model.tok_embd) &&
+            model.output->type == model.tok_embd->type) {
+            tok_embd_w = model.output;
+        }
 
         tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
 
