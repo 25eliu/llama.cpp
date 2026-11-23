@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "ggml.h"
 #include "htp/htp-tensor.h"
@@ -24,6 +25,11 @@ static inline bool htp_is_tiled_weight_tensor(const struct ggml_tensor * t) {
         return false;
     }
     if (!ggml_is_contiguous(t) || ggml_is_view(t)) {
+        return false;
+    }
+    // EXPERIMENT (build 3): the recurrent state cache (cache_r_l*, cache_s_l*, cache_ple_r_l*) gets more than one
+    // row when rollback snapshots are on, and was then sized as a tiled weight matrix (rows rounded up to 32)
+    if (strncmp(t->name, "cache_", 6) == 0) {
         return false;
     }
     if (t->ne[0] < 32 || (t->ne[0] % 32 != 0) || t->ne[3] != 1) {
