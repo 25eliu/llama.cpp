@@ -493,6 +493,18 @@ void llm_graph_input_cls::set_input(const llama_ubatch * ubatch) {
     }
 }
 
+void llm_graph_input_rs::set_input_slot_rev() const {
+    if (slot_rev && slot_rev->buffer) {
+        GGML_ASSERT(ggml_backend_buffer_is_host(slot_rev->buffer));
+        int32_t * data = (int32_t *) slot_rev->data;
+
+        const int64_t K = slot_rev->ne[0];
+        for (int64_t i = 0; i < K; ++i) {
+            data[i] = (int32_t) (K - 1 - i);
+        }
+    }
+}
+
 void llm_graph_input_rs::set_input(const llama_ubatch * ubatch) {
     GGML_UNUSED(ubatch);
 
@@ -507,6 +519,8 @@ void llm_graph_input_rs::set_input(const llama_ubatch * ubatch) {
             data[i] = mctx->s_copy(i);
         }
     }
+
+    set_input_slot_rev();
 }
 
 bool llm_graph_input_rs::can_reuse(const llm_graph_params & params) {
@@ -1221,6 +1235,8 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
             data[i] = mctx->get_recr()->s_copy(i);
         }
     }
+
+    inp_rs->set_input_slot_rev();
 }
 
 bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
@@ -1267,6 +1283,8 @@ void llm_graph_input_mem_hybrid_k::set_input(const llama_ubatch * ubatch) {
             data[i] = mctx->get_recr()->s_copy(i);
         }
     }
+
+    inp_rs->set_input_slot_rev();
 }
 
 bool llm_graph_input_mem_hybrid_k::can_reuse(const llm_graph_params & params) {
@@ -1324,6 +1342,8 @@ void llm_graph_input_mem_hybrid_iswa::set_input(const llama_ubatch * ubatch) {
             data[i] = mctx->get_recr()->s_copy(i);
         }
     }
+
+    inp_rs->set_input_slot_rev();
 }
 
 bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params) {
@@ -4118,10 +4138,14 @@ void llm_graph_context::build_conv_state_store(
 
     // each conv layer builds its own slot order {K-1, ..., 0}, on the device of the layer, and takes its tail
     // {Kw-1, ..., 0}; the size K never depends on the ubatch, so the reserved graph covers them all
-    ggml_tensor * s_slot_rev = ggml_arange(ctx0, 0.0f, (float) K, 1.0f);
-    s_slot_rev = ggml_scale_bias(ctx0, s_slot_rev, -1.0f, (float) (K - 1));
-    s_slot_rev = ggml_cast(ctx0, s_slot_rev, GGML_TYPE_I32);
-    cb(s_slot_rev, "s_slot_rev", -1);
+    // EXPERIMENT (build 2): the slot order is a graph input shared by all layers and filled on the host
+    // (see llm_graph_input_rs::set_input_slot_rev), instead of arange -> scale_bias -> cast in every layer
+    if (inp->slot_rev == nullptr) {
+        inp->slot_rev = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, K);
+        ggml_set_input(inp->slot_rev);
+        ggml_set_name(inp->slot_rev, "rs_slot_rev");
+    }
+    ggml_tensor * s_slot_rev = inp->slot_rev;
 
     ggml_tensor * slot_order = ggml_view_1d(ctx0, s_slot_rev, Kw, ggml_row_size(GGML_TYPE_I32, K - Kw));
 
