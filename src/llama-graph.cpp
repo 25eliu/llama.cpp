@@ -4136,33 +4136,26 @@ void llm_graph_context::build_conv_state_store(
     const int64_t K  = (int64_t) cparams.n_rs_seq + 1;
     const int64_t Kw = std::min(n, K);
 
-    // each conv layer builds its own slot order {K-1, ..., 0}, on the device of the layer, and takes its tail
-    // {Kw-1, ..., 0}; the size K never depends on the ubatch, so the reserved graph covers them all
-    // EXPERIMENT (build 2): the slot order is a graph input shared by all layers and filled on the host
-    // (see llm_graph_input_rs::set_input_slot_rev), instead of arange -> scale_bias -> cast in every layer
-    if (inp->slot_rev == nullptr) {
-        inp->slot_rev = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, K);
-        ggml_set_input(inp->slot_rev);
-        ggml_set_name(inp->slot_rev, "rs_slot_rev");
+    // EXPERIMENT (build 4): one plain copy per snapshot slot instead of a single set_rows over all slots.
+    // set_rows saw rows of n_cols elements (12 bytes for qwen35) and moved channels * Kw of them one by one,
+    // which cost about 2.5 ms per layer on the Hexagon backend. A copy of a strided window is what the
+    // n_rs_seq == 0 path above already does, so no slot order tensor is needed at all.
+    // window w starts at column n - (Kw - 1) + w (ascending time) and is rollback slot Kw - 1 - w
+    GGML_UNUSED(K);
+    for (int64_t w = 0; w < Kw; ++w) {
+        const int64_t slot = Kw - 1 - w;
+
+        ggml_tensor * window = ggml_view_3d(ctx0, conv_x,
+                n_cols, channels, n_seqs,
+                conv_x->nb[1], conv_x->nb[2],
+                ggml_row_size(conv_x->type, n - (Kw - 1) + w));
+
+        ggml_tensor * cell = ggml_view_2d(ctx0, s,
+                n_cols*channels, n_seqs,
+                row_size, (size_t) slot*mctx_cur->get_size()*row_size + cell_offs);
+
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, window, cell));
     }
-    ggml_tensor * s_slot_rev = inp->slot_rev;
-
-    ggml_tensor * slot_order = ggml_view_1d(ctx0, s_slot_rev, Kw, ggml_row_size(GGML_TYPE_I32, K - Kw));
-
-    // window w starts at column n - (Kw - 1) + w (ascending time) and is rollback slot Kw - 1 - w,
-    // consecutive windows start one element apart, so they overlap
-    ggml_tensor * windows = ggml_view_4d(ctx0, conv_x,
-            n_cols, Kw, channels, n_seqs,
-            ggml_element_size(conv_x), conv_x->nb[1], conv_x->nb[2],
-            ggml_row_size(conv_x->type, n - (Kw - 1)));
-
-    // [n_cols, slot, channel, seq] view of the cells of this ubatch
-    ggml_tensor * slots = ggml_view_4d(ctx0, s,
-            n_cols, K, channels, n_seqs,
-            (size_t) mctx_cur->get_size()*row_size, ggml_row_size(s->type, n_cols), row_size,
-            cell_offs);
-
-    ggml_build_forward_expand(gf, ggml_set_rows(ctx0, slots, windows, slot_order));
 }
 
 ggml_tensor * llm_graph_context::build_rwkv_token_shift_load(
