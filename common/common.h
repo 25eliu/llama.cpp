@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <fstream>
 #include <cstdio>
+#include <cstdlib>
 
 #if defined(_WIN32) && !defined(_WIN32_WINNT)
 #define _WIN32_WINNT 0x0A00
@@ -417,6 +418,11 @@ struct common_params_speculative {
             return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 || t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
         });
 
+        // EXPERIMENT (build 1): keep no recurrent-state snapshots, so a rejected draft is undone by
+        // checkpoint restore instead. Set LLAMA_SPEC_RS_SEQ=1 to get the original behaviour back.
+        if (std::getenv("LLAMA_SPEC_RS_SEQ") == nullptr) {
+            return 0u;
+        }
         return needs_rs_seq ? draft.n_max : 0u;
     }
 };
