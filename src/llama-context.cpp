@@ -3248,7 +3248,11 @@ llm_graph_cb llama_context::graph_get_cb() const {
         // FIXME: fix in ggml_backend_sched
         const bool full_offload = model.n_gpu_layers() > model.hparams.n_layer_all;
         if (ubatch.n_tokens < 32 || full_offload) {
-            if (il != -1 && (strcmp(name, "norm") == 0 || strcmp(name, "l_last") == 0)) {
+            // EXPERIMENT (build 5): the MTP head's token embedding lookup was scheduled on the device that holds
+            // token_embd (first device) while the head itself runs on the device of its layer, which cost two extra
+            // backend round trips (lookup, then copy across) per head step. Run the lookup with the head.
+            if (il != -1 && (strcmp(name, "norm") == 0 || strcmp(name, "l_last") == 0 ||
+                             (strcmp(name, "mtp_tok_embd") == 0 && cur->op == GGML_OP_GET_ROWS))) {
                 const auto & dev_layer = model.dev_layer(il);
                 for (const auto & backend : backends) {
                     if (ggml_backend_get_device(backend.get()) == dev_layer) {
