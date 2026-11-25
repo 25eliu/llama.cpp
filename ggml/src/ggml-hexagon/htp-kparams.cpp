@@ -695,7 +695,8 @@ static bool htp_kparams_solve_hmx_mm(
             m_for_solver_padded            = hex_round_up(std::max(m_for_solver, 32), 32);
         }
     }
-    const bool pipeline       = is_matmul_id ? false : htp_mm_hmx_pipeline(m_for_solver);
+    // experiment: GGML_HEXAGON_MM_PIPE_MIN lowers the row count from which dequantize and HMX compute overlap (default 32)
+    const bool pipeline       = is_matmul_id ? false : (m_for_solver > opt_mm_pipe_min);
     const bool is_batched_val = is_matmul_id ? false : is_batched;
     const int  group_size     = (ne02 > 0 ? ne12 / ne02 : 1);
 
